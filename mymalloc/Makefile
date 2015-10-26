@@ -14,11 +14,12 @@ endif
 
 HEADERS := \
 	allocator_interface.h \
+	bfl.h \
 	config.h \
 	fsecs.h \
 	mdriver.h \
 	memlib.h \
-	validator.h
+	validator.h \
 
 # Blank line ends list.
 
@@ -30,6 +31,7 @@ OBJS := \
 MDRIVER_OBJS:= \
 	allocator.o \
 	bad_allocator.o \
+	bfl.o \
 	clock.o \
 	fcyc.o \
 	fsecs.o \
