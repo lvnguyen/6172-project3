@@ -76,22 +76,23 @@ int my_check() {
 // return success.
 int my_init() {
   bfl = bfl_new();
+  return 0;
 }
 
 //  malloc - Allocate a block by incrementing the brk pointer.
 //  Always allocate a block whose size is a multiple of the alignment.
 void * my_malloc(size_t size) {
-  return bfl_malloc(&bfl, size);
+  return bfl_malloc(bfl, size);
 }
 
 // free - Freeing a block does nothing.
 void my_free(void *ptr) {
-  bfl_free(&bfl, ptr);
+  bfl_free(bfl, ptr);
 }
 
 // realloc - Implemented simply in terms of malloc and free
 void * my_realloc(void *ptr, size_t size) {
-  return bfl_realloc(&bfl, ptr, size);
+  return bfl_realloc(bfl, ptr, size);
 }
 
 // call mem_reset_brk.

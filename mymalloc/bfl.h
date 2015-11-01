@@ -2,6 +2,15 @@
 #define _BFL_H
 
 #define BFL_SIZE 32
+#define WORD_ALIGN 8
+
+
+#define ALIGNED(x, alignment) ((((uint64_t)x) & ((alignment)-1)) == 0)
+#define ALIGN_FORWARD(x, alignment) \
+    ((((uint64_t)x) + ((alignment)-1)) & (~((uint64_t)(alignment)-1)))
+
+#define IS_WORD_ALIGNED(x) (ALIGNED(x, WORD_ALIGN))
+#define ALIGN_WORD_FORWARD(x) ALIGN_FORWARD(x, WORD_ALIGN)
 
 size_t lg2(uint32_t n);
 
@@ -17,7 +26,7 @@ void freelist_split(freelist* src_node, freelist* target_list, size_t size);
 typedef freelist** binned_free_list;
 
 // create a binned free list
-binned_free_list bfl_new();
+binned_free_list* bfl_new();
 
 // delete the binned free list
 void bfl_delete(binned_free_list* bfl);
