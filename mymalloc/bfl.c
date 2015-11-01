@@ -39,14 +39,21 @@ binned_free_list* bfl_new() {
   return bfl;
 }
 
+void insert_block(freelist * node, binned_free_list * bfl, int k) {
+  assert(k >= 0 && k < BFL_SIZE);
+  assert(node->size == k);
+  node->next = *bfl[k];
+  *bfl[k] = node;
+}
+
 // alloc a block of value size, ensuring the returned address is 8-byte aligned
 // size must be a multiple of the word size (8 byte)
 void * alloc_aligned(size_t size) {
   void * hi = mem_heap_hi();
   size_t padding = (void *) ALIGN_FORWARD(hi, WORD_ALIGN) - hi;
-  size_t requested_size = padding + size;
+  size_t pad_size = padding + size;
 
-  void * q = mem_sbrk(requested_size);
+  void * q = mem_sbrk(pad_size);
   if (q == NULL) {    
 #ifdef DEBUG
     // is this because we run out of memory?
@@ -55,7 +62,7 @@ void * alloc_aligned(size_t size) {
     return NULL;
   }  
   assert( IS_WORD_ALIGNED(mem_heap_hi()) );
-  return mem_heap_hi() - requested_size;
+  return mem_heap_hi() - size;
 }
 
 void freelist_free(freelist* fl) {
@@ -64,17 +71,20 @@ void freelist_free(freelist* fl) {
   free(fl);
 }
 
-void freelist_split(freelist* src_node, freelist* target_list, size_t size) {  
-  freelist* intermediate = src_node + (size >> 1);
-  if (target_list != NULL) {
-    intermediate->next = target_list;
-    src_node->next = intermediate;
-    target_list = src_node;
-  } else {
-    src_node->next = intermediate;
-    intermediate->next = NULL;
-    target_list = src_node;
+void freelist_split(freelist* src_node, binned_free_list* bfl, size_t k) {  
+  // Due to the header, we cannot split a block of size k into two blocks of size k - 1
+  // We can only split into k - 1 and k - 2
+  assert(k > 0);
+
+  // resize the size of two splitted blocks
+  assert(src_node->size == k);
+  src_node->size = k - 1;
+  if (k > 1) {
+    freelist * small_node = (freelist *) (src_node + sizeof(freelist) + (1 << (k - 1)));
+	small_node->size = k - 2;
+	insert_block(small_node, bfl, k - 2);
   }
+  insert_block(src_node, bfl, k - 1);
 }
 
 void bfl_delete(binned_free_list* bfl) {
@@ -87,10 +97,13 @@ void bfl_delete(binned_free_list* bfl) {
 // Split a node at level k into two smaller nodes
 // Require k > 0 and bfl[k] is not empty
 void bfl_single_split(binned_free_list* bfl, size_t k) {
+  assert(k > 0);
+  assert(*bfl[k] != NULL);
+
   freelist* temp = *bfl[k];
   if (temp == NULL) return;
   *bfl[k] = temp->next;
-  freelist_split(temp, *bfl[k - 1], 1<<k);
+  freelist_split(temp, bfl, k);
 }
 
 void* bfl_malloc(binned_free_list* bfl, size_t size) {
@@ -114,36 +127,31 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
 
   assert(depth >= 0 && depth <= BFL_SIZE);
 
-  freelist* temp;
-
-  // A free block found, split until bfl[k] contains a block  
-
-  /*if (*bfl[depth] != NULL) {
-    while (depth > k) {
+  freelist * temp;
+  // A free block found, split down to level k
+  if (depth < BFL_SIZE && *bfl[depth] != NULL) {
+    while (*bfl[k] == NULL) {
       bfl_single_split(bfl, depth);
-      depth--;
-    }
-    temp = *bfl[k];*/
-  if (*bfl[k] != NULL) {
+	  depth -= 2;
+	}
     temp = *bfl[k];
-    *bfl[k] = (temp->next == NULL) ? NULL : temp->next;
-  } else {
+    *bfl[k] = temp->next;
+  }
+  else {
     // mem_sbrk a new block
-    size_t requested_size = (1 << (k + 1));
+    size_t requested_size = (1 << k) + sizeof(freelist);
     void * new_alloc = alloc_aligned(requested_size);
     if (new_alloc == NULL) {
       return NULL;
     }
-    
-    // Align new_alloc to be 8-byte
+
     temp = (freelist *) new_alloc;
     temp->next = NULL;
   }
 
-  // TODO: put even more data into header (for coalescing)
   assert(temp != NULL);  
-  * (size_t *) ((void *) temp) = k;
-  return temp;
+  temp->size = k;
+  return (void *) ((void *) temp + sizeof(freelist));
 }
 
 void bfl_free(binned_free_list* bfl, void* node) {
@@ -152,10 +160,11 @@ void bfl_free(binned_free_list* bfl, void* node) {
   }
 
   // BUG: sometimes this created a really funny value for k
-  size_t k = *(size_t *) node; // leak. TODO: I forgot what this comment means
-  assert (k >= 0 && k < BFL_SIZE);
+  freelist* fl = (freelist *) (node - sizeof(freelist));
+  assert((uint64_t) node - (uint64_t) fl == sizeof(freelist));
+  size_t k = fl->size; // leak. TODO: I forgot what this comment means
+  assert(k >= 0 && k < BFL_SIZE);
 
-  freelist* fl = (freelist *) node;
   fl->next = *bfl[k];
   *bfl[k] = fl;
 }
@@ -171,7 +180,9 @@ void* bfl_realloc(binned_free_list* bfl, void* node, size_t size) {
     return node;
   }
 
-  size_t k = *(size_t *) node;
+  freelist* fl = (freelist *) (node - sizeof(freelist));
+  assert( (uint64_t) bfl - (uint64_t) fl == sizeof(freelist) );
+  size_t k = fl->size; 
   size_t nodesize = 1 << k;
 
   // If the new size equals to the old size, we simply return the node
@@ -181,30 +192,34 @@ void* bfl_realloc(binned_free_list* bfl, void* node, size_t size) {
   /* TODO: for now, just alloc a new node, copy the old content to the new
    * and free the old node
    */
-  void * new_node = bfl_malloc(bfl, size);
+  /*void * new_node = bfl_malloc(bfl, size);
   memcpy(new_node, node, (size > nodesize) ? nodesize : size);
   bfl_free(bfl, node);
-  return new_node;
+  return new_node;*/
 
   /* If the requested size is larger than the current size,
    * we malloc a new block of the new size, copy the content
    * of the current block to the new block, and free the old block
    */
-  /*if (size > nodesize) {
+  if (size > nodesize) {
     void* new_node = bfl_malloc(bfl, size);
     memcpy(new_node, node, nodesize);
     bfl_free(bfl, node);
     return new_node;
   } else {
-    k--;
-    while ((1 << k) + size < nodesize) {
-      freelist* temp = (freelist*)(node + nodesize/2);
-      temp->next = bfl[k];
-      bfl[k] = temp;
-      k--;
-      nodesize /= 2;
-    }
-    *((size_t*)((void*)(node))-1) = k+1;
-    return node;
-  }*/
+  /*
+   * Otherwise, split the block into smaller ones
+   * Put the small ones into the free list
+   */
+	while (k > 1 && (1 << (k - 1)) >= size) {
+	  assert(fl->size == k);
+	  fl->size--;
+	  freelist * small_node = (freelist *) (node + (1 << (k - 1)));
+	  small_node->size = k - 2;
+
+	  insert_block(small_node, bfl, k - 2);
+	  k--;
+	}
+	return node;
+  }
 }

@@ -16,14 +16,15 @@ size_t lg2(uint32_t n);
 
 typedef struct freelist {
   struct freelist* next;
+  size_t size;
 } freelist;
 
 void freelist_free(freelist* fl);
 
-// split freelist into two freelists
-void freelist_split(freelist* src_node, freelist* target_list, size_t size);
-
 typedef freelist** binned_free_list;
+
+// split freelist into two freelists
+void freelist_split(freelist* src_node, binned_free_list* bfl, size_t size);
 
 // create a binned free list
 binned_free_list* bfl_new();
