@@ -4,7 +4,6 @@
 #define BFL_SIZE 32
 #define WORD_ALIGN 8
 
-
 #define ALIGNED(x, alignment) ((((uint64_t)x) & ((alignment)-1)) == 0)
 #define ALIGN_FORWARD(x, alignment) \
     ((((uint64_t)x) + ((alignment)-1)) & (~((uint64_t)(alignment)-1)))
