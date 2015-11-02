@@ -7,6 +7,9 @@
 #include "./bfl.h"
 #include "./memlib.h"
 
+// TODO: when inserting a block, I might just remerge them together
+// So when I am mallocing, I should disable block coalescing
+
 // lg bithack
 // https://graphics.stanford.edu/~seander/bithacks.html#IntegerLogDeBruijn
 size_t lg2(uint32_t m) {
@@ -45,49 +48,93 @@ binned_free_list* bfl_new() {
  * TODO: merge with previous one as well 
  */
 void perform_merge(binned_free_list * bfl, freelist * node, int k) {
-  return; // TODO
+  // if we can merge node with node->prev, shift node = node->prev
+  if (node->prev != NULL && (uint64_t) node - (uint64_t) node->prev == (1 << k)) {
+    node = node->prev;
+  }
+  // Condition check for merging
+  if (node->next != NULL && (uint64_t) node->next - (uint64_t) node == (1 << k)) {
+	// Linking the remaining nodes
+	freelist * lnode = node->prev;
+	freelist * rnode = node->next->next;
+	
+	if (lnode != NULL) {
+	  lnode->next = rnode;
+	}
+	if (rnode != NULL) {
+	  rnode->prev = lnode;
+	}
+
+	// if node is the first element of *bfl[k], we need to reupdate the head of *bfl[k]
+	// That is located at node->next->next
+	if (node->prev == NULL) {
+	  *bfl[k] = node->next->next;
+	}
+
+	// Unlink all possible links
+	node->next->prev = NULL;
+	node->next->next = NULL;
+	node->prev = NULL;
+	node->next = NULL;
+
+	// Create a new node out of the two
+    freelist * merge_node = (freelist *) node;
+	merge_node->next = NULL;
+	merge_node->prev = NULL;
+	merge_node->size = k + 1;
+	insert_block(merge_node, bfl, k + 1, true /* allow recursive merging */);
+  }
 }
 
 /* We now implement a simple coalescing strategy
  * We will first merge adjacent blocks of the same size
  * Condition: they must be exactly adjacent to each other (we will relax it later)
  * 
- * To do that, the linked list is stored in increasing order of address in memory 
+ * Require the linked list is stored in increasing order of address in memory 
  */
-void insert_block(freelist * node, binned_free_list * bfl, int k) {
+void insert_block(freelist * node, binned_free_list * bfl, int k, bool auto_merge) {
   assert(k >= 0 && k < BFL_SIZE);
   assert(node->size == k);
-  /*if (*bfl[k] == NULL) {
+  if (*bfl[k] == NULL) {
     node->next = NULL;
+	node->prev = NULL;
 	*bfl[k] = node;
-  }
-  else {
-	// TODO: coalesce with the previous block as well
+  } else {
+	// node should be the first element
 	if ( (uint64_t) node < (uint64_t) *bfl[k]) {
+	  node->prev = NULL;
 	  node->next = *bfl[k];
 	  *bfl[k] = node;
+	  node->next->prev = node;  // HACK: what I want is *bfl[k]->prev = node
 	} else {
 	  freelist * p;
 	  freelist * pprev;
+
+	  // Find the first node lying after node
+	  // Insert node before it
 	  for (p = *bfl[k]; p != NULL; p = p->next) {
 	    if ((uint64_t) p > (uint64_t) node) {
 		  pprev->next = node;
+		  node->prev = pprev;
 		  node->next = p;
+		  p->prev = node;
 		  break;
 		}
 		pprev = p;
 	  }
-	  // Base case: node is put at the end
+	  // node is put at the end
+	  assert(pprev != NULL);
 	  if (pprev->next == NULL) {
 		assert( (uint64_t) pprev < (uint64_t) node);
 		pprev->next = node;
+		node->prev = pprev;
 		node->next = NULL;
 	  }
 	}
-	perform_merge(bfl, node, k);
-  }*/
-  node->next = *bfl[k];
-  *bfl[k] = node;
+	if (auto_merge) {
+	  perform_merge(bfl, node, k);
+	}
+  }
 }
 
 // alloc a block of value size, ensuring the returned address is 8-byte aligned
@@ -125,8 +172,10 @@ void freelist_split(freelist* src_node, binned_free_list* bfl, size_t k) {
   src_node->size--;
   freelist * small_node = (freelist *) ((uint64_t) src_node + (1 << (k - 1)));
   small_node->size = k - 1;
-  insert_block(small_node, bfl, k - 1);
-  insert_block(src_node, bfl, k - 1);
+
+  // The last false argument prevents auto-merge of two small blocks
+  insert_block(small_node, bfl, k - 1, false);
+  insert_block(src_node, bfl, k - 1, false);
 }
 
 void bfl_delete(binned_free_list* bfl) {
@@ -186,6 +235,7 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
     }
     temp = (freelist *) new_alloc;
     temp->next = NULL;
+	temp->prev = NULL;
 	assert( (uint64_t) temp + (1 << k) == (uint64_t) mem_heap_hi() );
   }
 
@@ -204,7 +254,7 @@ void bfl_free(binned_free_list* bfl, void* node) {
   assert((uint64_t) node - (uint64_t) fl == sizeof(freelist));
   size_t k = fl->size;
   assert(k >= 0 && k < BFL_SIZE);
-  insert_block(fl, bfl, k);
+  insert_block(fl, bfl, k, true /* auto merge here */);
 }
 
 void* bfl_realloc(binned_free_list* bfl, void* node, size_t size) {
@@ -246,7 +296,7 @@ void* bfl_realloc(binned_free_list* bfl, void* node, size_t size) {
 	  fl->size--;
 	  freelist * small_node = (freelist *) ((uint64_t) fl + (1 << (k - 1)));
 	  small_node->size = k - 1;
-	  insert_block(small_node, bfl, k - 1);
+	  insert_block(small_node, bfl, k - 1, true /* auto merge allowed */);
 	  k--;
 	}
 	return node;
