@@ -12,6 +12,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,9 +96,11 @@ static void remove_range(range_t **ranges, char *lo) {
   // TODO(project3): YOUR CODE HERE
   
   // the removed element is right at the beginning of the list
+  bool is_removed = false;
   if (p->lo == lo) {
     *ranges = p->next;
 	p->next = NULL;
+	is_removed = true;
 	free(p);
   }
   else {
@@ -105,10 +108,12 @@ static void remove_range(range_t **ranges, char *lo) {
 	  if (p->lo == lo) {
 		prevp->next = p->next;
 		free(p);
+		is_removed = true;
 	  }
 	  prevp = p;
 	}
   }
+  assert(is_removed);
 }
 
 // clear_ranges - free all of the range records for a trace

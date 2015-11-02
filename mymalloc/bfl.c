@@ -80,7 +80,7 @@ void freelist_split(freelist* src_node, binned_free_list* bfl, size_t k) {
   assert(src_node->size == k);
   src_node->size = k - 1;
   if (k > 1) {
-    freelist * small_node = (freelist *) (src_node + sizeof(freelist) + (1 << (k - 1)));
+    freelist * small_node = (freelist *) ((uint64_t) src_node + sizeof(freelist) + (1 << (k - 1)));
 	small_node->size = k - 2;
 	insert_block(small_node, bfl, k - 2);
   }
@@ -138,20 +138,19 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
     *bfl[k] = temp->next;
   }
   else {
-    // mem_sbrk a new block
     size_t requested_size = (1 << k) + sizeof(freelist);
     void * new_alloc = alloc_aligned(requested_size);
     if (new_alloc == NULL) {
       return NULL;
     }
-
     temp = (freelist *) new_alloc;
     temp->next = NULL;
+	assert( (uint64_t) temp + sizeof(freelist) + (1 << k) == (uint64_t) mem_heap_hi() );
   }
 
   assert(temp != NULL);  
   temp->size = k;
-  return (void *) ((void *) temp + sizeof(freelist));
+  return (void *) ((uint64_t) temp + sizeof(freelist));
 }
 
 void bfl_free(binned_free_list* bfl, void* node) {
@@ -164,9 +163,7 @@ void bfl_free(binned_free_list* bfl, void* node) {
   assert((uint64_t) node - (uint64_t) fl == sizeof(freelist));
   size_t k = fl->size; // leak. TODO: I forgot what this comment means
   assert(k >= 0 && k < BFL_SIZE);
-
-  fl->next = *bfl[k];
-  *bfl[k] = fl;
+  insert_block(fl, bfl, k);
 }
 
 void* bfl_realloc(binned_free_list* bfl, void* node, size_t size) {
@@ -180,8 +177,8 @@ void* bfl_realloc(binned_free_list* bfl, void* node, size_t size) {
     return node;
   }
 
-  freelist* fl = (freelist *) (node - sizeof(freelist));
-  assert( (uint64_t) bfl - (uint64_t) fl == sizeof(freelist) );
+  freelist* fl = (freelist *) ((uint64_t) node - sizeof(freelist));
+  assert( (uint64_t) node - (uint64_t) fl == sizeof(freelist) );
   size_t k = fl->size; 
   size_t nodesize = 1 << k;
 
@@ -214,7 +211,7 @@ void* bfl_realloc(binned_free_list* bfl, void* node, size_t size) {
 	while (k > 1 && (1 << (k - 1)) >= size) {
 	  assert(fl->size == k);
 	  fl->size--;
-	  freelist * small_node = (freelist *) (node + (1 << (k - 1)));
+	  freelist * small_node = (freelist *) ((uint64_t) node + (1 << (k - 1)));
 	  small_node->size = k - 2;
 
 	  insert_block(small_node, bfl, k - 2);
