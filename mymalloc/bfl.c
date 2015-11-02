@@ -134,7 +134,7 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
 
   freelist * temp;
   // A free block found, split down to level k
-  if (depth < BFL_SIZE && *bfl[depth] != NULL) {
+  if (depth < BFL_SIZE && *bfl[depth] != NULL && depth - k <= 3) {
     while (*bfl[k] == NULL) {
       bfl_single_split(bfl, depth);
 	  depth -= 2;
