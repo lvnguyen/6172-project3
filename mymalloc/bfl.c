@@ -9,16 +9,17 @@
 
 // lg bithack
 // https://graphics.stanford.edu/~seander/bithacks.html#IntegerLogDeBruijn
-size_t lg2(uint32_t n) {
+size_t lg2(uint32_t m) {
   // TODO: put a faster log here
-  size_t logn = 0;
+  uint32_t n = m;
+  /*size_t logn = 0;
   while ((1 << logn) < n) {
     logn++;
   }
-  return logn;
+  return logn;*/
 
   // This bithack is somehow incorrect
-  /*static const int MultiplyDeBruijnBitPosition[32] = {
+  static const int MultiplyDeBruijnBitPosition[32] = {
     0, 9, 1, 10, 13, 21, 2, 29, 11, 14, 16, 18, 22, 25, 3, 30,
     8, 12, 20, 28, 15, 17, 24, 7, 19, 27, 23, 6, 26, 5, 4, 31
   };
@@ -28,7 +29,11 @@ size_t lg2(uint32_t n) {
   n |= n >> 4;
   n |= n >> 8;
   n |= n >> 16;
-  return (size_t)(MultiplyDeBruijnBitPosition[(uint32_t)(n * 0x07C4ACDDU) >> 27]);*/
+  size_t r = (size_t)(MultiplyDeBruijnBitPosition[(uint32_t)(n * 0x07C4ACDDU) >> 27]);
+  if ((1 << r) < m) {
+    r++;
+  }
+  return r;
 }
 
 binned_free_list* bfl_new() {
