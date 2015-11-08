@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 
+#define BFL_MIN_BLOCK_SIZE 32
 #define BFL_SIZE 32
 #define WORD_ALIGN 8
 
@@ -13,42 +14,37 @@
 #define IS_WORD_ALIGNED(x) (ALIGNED(x, WORD_ALIGN))
 #define ALIGN_WORD_FORWARD(x) ALIGN_FORWARD(x, WORD_ALIGN)
 
-size_t lg2(uint32_t n);
+struct block_header_right;
 
-typedef struct freelist {
-  struct freelist * next;
-  struct freelist * prev;
+typedef struct block_header {
+  struct block_header_right* right;
+  struct block_header* next; // for free list
+  struct block_header* prev; // for free list
   size_t size;
-} freelist;
+  bool free;
+} block_header;
 
-void freelist_free(freelist* fl);
+typedef struct block_header_right {
+  block_header* left;
+} block_header_right;
 
-typedef freelist** binned_free_list;
+#define TOTAL_HEADER_SIZE (sizeof(block_header)+sizeof(block_header_right))
 
-// split freelist into two freelists
-void freelist_split(freelist* src_node, binned_free_list* bfl, size_t size);
+typedef block_header** binned_free_list;
 
 // create a binned free list
-binned_free_list* bfl_new();
+binned_free_list bfl_new();
 
 // delete the binned free list
-void bfl_delete(binned_free_list* bfl);
-
-// bfl has non-nill freelist at depth k, will split free node into depth k-1
-void bfl_single_split(binned_free_list* bfl, size_t k);
+void bfl_delete(binned_free_list bfl);
 
 // malloc using binned free list
-void* bfl_malloc(binned_free_list* bfl, size_t size);
+void* bfl_malloc(binned_free_list bfl, size_t size);
 
 // free using binned free list
-void bfl_free(binned_free_list* bfl, void* node);
+void bfl_free(binned_free_list bfl, void* node);
 
 // realloc using binned free list
-void* bfl_realloc(binned_free_list* bfl, void* node, size_t size);
+void* bfl_realloc(binned_free_list bfl, void* node, size_t size);
 
-// Insert a new freelist block at level k
-// Checking whether I need to auto merge
-void insert_block(freelist * node, binned_free_list * bfl, int k, bool auto_merge);
-
-void perform_merge(binned_free_list * bfl, freelist * node, int k);
 #endif

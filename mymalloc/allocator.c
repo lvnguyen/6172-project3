@@ -45,7 +45,7 @@
 // The smallest aligned size that will hold a size_t value.
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
-binned_free_list* bfl;
+binned_free_list bfl;
 
 // check - This checks our invariant that the size_t header before every
 // block points to either the beginning of the next block, or the end of the
