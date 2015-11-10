@@ -204,17 +204,27 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size) {
   }
 
   Node* node = (Node*)ptr - 1;
+  Node* next_left;
   void* new_ptr;
   switch(how_to_use_block(node, size)) {
     case 0:
       // If the requested size is larger than the current size,
+      // we first see if we can coalesce right. Otherwise,
       // we malloc a new block of the new size, copy the content
       // of the current block to the new block, and free the old block
-      new_ptr = bfl_malloc(bfl, orig_size);
-      memcpy(new_ptr, ptr, node->size - TOTAL_HEADER_SIZE);
-      bfl_free(bfl, ptr);
-      assert(IS_WORD_ALIGNED(new_ptr));
-      return new_ptr;
+      next_left = (Node*)(NODE_TO_RIGHT(node)+1);
+      if ((void*)next_left < mem_heap_hi() && (void*)(NODE_TO_RIGHT(next_left)+1) < mem_heap_hi() && next_left->free) {
+        bfl_remove(bfl, next_left);
+        node->size += next_left->size;
+        NODE_TO_RIGHT(node)->left = node;
+        return bfl_realloc(bfl, ptr, orig_size);
+      } else {
+        new_ptr = bfl_malloc(bfl, orig_size);
+        memcpy(new_ptr, ptr, node->size - TOTAL_HEADER_SIZE);
+        bfl_free(bfl, ptr);
+        assert(IS_WORD_ALIGNED(new_ptr));
+        return new_ptr;
+      }
     case 1:
       // Split bigger node to size
       bfl_block_split(bfl, node, size);
