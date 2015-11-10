@@ -20,20 +20,31 @@ struct block_header_right;
 
 typedef uint8_t lgsize_t;
 
-#define NODE_TO_RIGHT(node) ((block_header_right*)((void*)node + node->size) - 1)
+#define NODE_TO_RIGHT(node) ((block_header_right*)((void*)node + GET_SIZE(node)) - 1)
+
+// encode free bit in size
+#define SET_FREE(node) (node->size |= 1)
+#define SET_UNFREE(node) (node->size &= ~1)
+#define IS_FREE(node) ((node->size & 1) != 0)
+#define GET_SIZE(node) (node->size & ~1)
+#define SET_SIZE(node, size) (node->size = (size & ~1) | IS_FREE(node))
+#define UP_SIZE(node, other) (node->size += GET_SIZE(other))
 
 typedef struct Node {
+  size_t size;
   struct Node* next; // for free list
   struct Node* prev; // for free list
-  size_t size;
-  bool free;
 } Node;
+
+typedef struct {
+  size_t size;
+} external_node;
 
 typedef struct block_header_right {
   Node* left;
 } block_header_right;
 
-#define TOTAL_HEADER_SIZE (sizeof(Node)+sizeof(block_header_right))
+#define TOTAL_HEADER_SIZE (sizeof(external_node)+sizeof(block_header_right))
 
 typedef struct {
   Node* lists[BFL_SIZE];
