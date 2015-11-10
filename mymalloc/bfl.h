@@ -3,8 +3,9 @@
 
 #include <stdbool.h>
 
-#define BFL_MIN_BLOCK_SIZE 32
-#define BFL_MIN_LG 5
+#define BFL_INSANITY_SIZE (1 << 20)
+#define BFL_MIN_BLOCK_SIZE 64
+#define BFL_MIN_LG 6
 #define BFL_SIZE 32
 #define WORD_ALIGN 8
 
@@ -19,8 +20,9 @@ struct block_header_right;
 
 typedef uint8_t lgsize_t;
 
+#define NODE_TO_RIGHT(node) ((block_header_right*)((void*)node + node->size) - 1)
+
 typedef struct Node {
-  struct block_header_right* right;
   struct Node* next; // for free list
   struct Node* prev; // for free list
   size_t size;
