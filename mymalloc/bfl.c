@@ -185,6 +185,7 @@ void bfl_free(binned_free_list* bfl, void* ptr) {
 }
 
 void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size) {
+  size_t orig_size = size;  // Since malloc adds header's size, we need to use original's size when passing as args 
   size += TOTAL_HEADER_SIZE;
   if (size < BFL_MIN_BLOCK_SIZE) {
     size = BFL_MIN_BLOCK_SIZE;
@@ -192,7 +193,7 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size) {
   size = ALIGN_WORD_FORWARD(size);
   // If the original node is NULL, we need to allocate a new node
   if (ptr == NULL)
-    return bfl_malloc(bfl, size);
+    return bfl_malloc(bfl, orig_size);
 
   // If the requested size is 0, we free the node
   if (size == 0) {
@@ -201,15 +202,14 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size) {
   }
 
   Node* node = (Node*)ptr - 1;
-  size_t old_size = node->size;
   void* new_ptr;
   switch(how_to_use_block(node, size)) {
     case 0:
       // If the requested size is larger than the current size,
       // we malloc a new block of the new size, copy the content
       // of the current block to the new block, and free the old block
-      new_ptr = bfl_malloc(bfl, size);
-      memcpy(new_ptr, ptr, old_size - TOTAL_HEADER_SIZE);
+      new_ptr = bfl_malloc(bfl, orig_size);
+      memcpy(new_ptr, ptr, node->size - TOTAL_HEADER_SIZE);
       bfl_free(bfl, ptr);
       assert(IS_WORD_ALIGNED(new_ptr));
       return new_ptr;

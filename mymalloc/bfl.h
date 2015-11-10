@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-#define BFL_INSANITY_SIZE (1 << 20)
+#define BFL_INSANITY_SIZE (1 << 25)
 #define BFL_MIN_BLOCK_SIZE 64
 #define BFL_MIN_LG 6
 #define BFL_SIZE 32

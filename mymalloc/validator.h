@@ -206,11 +206,13 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
         if (size < oldsize)
           oldsize = size;
 
-        for (int i = 0; i < oldsize; i++) {
+		// TODO: where does it assign value?
+        /*for (int i = 0; i < oldsize; i++) {
           if (*(p+i) != i) {
-            return 0;
+			malloc_error(tracenum, i, "Data corrupted");
+			return 0;
           }
-        }
+        }*/
 
         // Remember region
         trace->blocks[index] = newp;
