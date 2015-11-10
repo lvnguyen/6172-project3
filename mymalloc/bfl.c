@@ -58,7 +58,7 @@ static void inline bfl_add(binned_free_list* bfl, void* ptr, size_t size) {
   bfl_add_block(bfl, node);
 }
 
-static void try_merge(binned_free_list* bfl, Node* node) {
+static void bfl_coalesce(binned_free_list* bfl, Node* node) {
   if (node == NULL) return;
   assert(node->free);
   Node* left = node;
@@ -83,7 +83,7 @@ static void try_merge(binned_free_list* bfl, Node* node) {
   // address header at right+1, check valid
   if (!((void*)(right+1) > hi)) {
     Node* next_left = (Node*)(NODE_TO_RIGHT(node)+1);
-    if ((void*)(NODE_TO_RIGHT(next_left)+1) < hi && next_left->free) {
+    if ((void*)next_left < hi && (void*)(NODE_TO_RIGHT(next_left)+1) < hi && next_left->free) {
       bfl_remove(bfl, left);
       bfl_remove(bfl, next_left);
 
@@ -113,6 +113,7 @@ static void bfl_block_split(binned_free_list* bfl, Node* node, const size_t size
   size_t right_size = (void*)right - (void*)mid_right;
   assert(right_size >= BFL_MIN_BLOCK_SIZE);
   bfl_add(bfl, (void*)(mid_right+1), right_size);
+  bfl_coalesce(bfl, (Node*)(mid_right+1));
 }
 
 static int inline how_to_use_block(Node* const node, const size_t size) {
@@ -181,11 +182,11 @@ void bfl_free(binned_free_list* bfl, void* ptr) {
   Node* node = (Node*)ptr - 1;
   node->free = true;
   bfl_add_block(bfl, node);
-  try_merge(bfl, node);
+  bfl_coalesce(bfl, node);
 }
 
 void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size) {
-  size_t orig_size = size;  // Since malloc adds header's size, we need to use original's size when passing as args 
+  const size_t orig_size = size;
   size += TOTAL_HEADER_SIZE;
   if (size < BFL_MIN_BLOCK_SIZE) {
     size = BFL_MIN_BLOCK_SIZE;
