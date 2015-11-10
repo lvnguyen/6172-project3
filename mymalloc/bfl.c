@@ -7,111 +7,71 @@
 #include "./bfl.h"
 #include "./memlib.h"
 
-// lg bithack
-// https://graphics.stanford.edu/~seander/bithacks.html#IntegerLogDeBruijn
-static size_t lg2(uint32_t m) {
-  uint32_t n = m;
-  static const int MultiplyDeBruijnBitPosition[32] = {
-    0, 9, 1, 10, 13, 21, 2, 29, 11, 14, 16, 18, 22, 25, 3, 30,
-    8, 12, 20, 28, 15, 17, 24, 7, 19, 27, 23, 6, 26, 5, 4, 31
-  };
-
-  n |= n >> 1;
-  n |= n >> 2;
-  n |= n >> 4;
-  n |= n >> 8;
-  n |= n >> 16;
-  size_t r = (size_t)(MultiplyDeBruijnBitPosition[(uint32_t)(n * 0x07C4ACDDU) >> 27]);
-  // round down
-  if ((1 << r) > m) {
-    r--;
-  }
-  return r;
-}
-
 // alloc a block of value size, ensuring the returned address is 8-byte aligned
 // size must be a multiple of the word size (8 byte)
-static void* alloc_aligned(size_t size) {
+static void* alloc_aligned(const size_t size) {
   void * hi = mem_heap_hi();
   size_t padding = (void *) ALIGN_WORD_FORWARD(hi) - hi;
   size_t pad_size = padding + size;
 
   void * q = mem_sbrk(pad_size);
-  if (q == NULL) {    
-#ifdef DEBUG
-    // is this because we run out of memory?
-    printf("Memory limit exceeded\n");
-#endif
+  if (q == NULL) {
     return NULL;
-  }  
+  }
   return mem_heap_hi() - size;
 }
 
 binned_free_list bfl_new() {
-  binned_free_list bfl = alloc_aligned(BFL_SIZE*sizeof(block_header*));
+  binned_free_list bfl;
   for (int i = 0; i < BFL_SIZE; i++) {
-    bfl[i] = NULL;
+    bfl.lists[i] = NULL;
   }
   return bfl;
 }
 
-static void block_delete(block_header* bl) {
-  if (bl == NULL) return;
-  block_delete(bl->next);
-  free(bl->right);
-  free(bl);
-}
-
-void bfl_delete(binned_free_list bfl) {
-  for (int i = 0; i < BFL_SIZE; i++) {
-    block_delete(bfl[i]);
-  }
-  free(bfl);
-}
-
-static void inline bfl_remove_block(binned_free_list bfl, block_header* bl) {
-  if (bl->prev != NULL) {
-    bl->prev->next = bl->next;
+static void inline bfl_remove(binned_free_list* bfl, Node* node) {
+  if (node->prev != NULL) {
+    node->prev->next = node->next;
   } else {
-    bfl[lg2(bl->size)] = bl->next;
+    bfl->lists[lg2_down(node->size)] = node->next;
   }
 }
 
-static void inline bfl_add_block(binned_free_list bfl, block_header* bl) {
-  const size_t k = lg2(bl->size);
-  bl->prev = NULL;
-  bl->next = bfl[k];
-  if (bfl[k] != NULL) {
-    bfl[k]->prev = bl;
+static void inline bfl_add_block(binned_free_list* bfl, Node* node) {
+  const size_t k = lg2_down(node->size);
+  node->prev = NULL;
+  node->next = bfl->lists[k];
+  if (bfl->lists[k] != NULL) {
+    bfl->lists[k]->prev = node;
   }
-  bfl[k] = bl;
+  bfl->lists[k] = node;
 }
 
-static void inline bfl_add(binned_free_list bfl, void* node, size_t size) {
-  block_header* bl = (block_header*)node;
-  bl->right = (block_header_right*)((char*)bl + sizeof(block_header) + size);
-  bl->right->left = bl;
-  bl->size = size;
-  bl->free = true;
-  bfl_add_block(bfl, bl);
+static void inline bfl_add(binned_free_list* bfl, void* ptr, size_t size) {
+  Node* node = (Node*)ptr;
+  node->right = (block_header_right*)(ptr + size) - 1;
+  node->right->left = node;
+  node->size = size;
+  node->free = true;
+  bfl_add_block(bfl, node);
 }
 
-static block_header* try_merge(binned_free_list bfl, block_header* bl) {
-  if (bl == NULL) return NULL;
-  assert(bl->free);
-  block_header* left = bl;
-  block_header_right* right = bl->right;
+static void try_merge(binned_free_list* bfl, Node* node) {
+  if (node == NULL) return;
+  assert(node->free);
+  Node* left = node;
+  block_header_right* right = node->right;
   const void* lo = mem_heap_lo();
   const void* hi = mem_heap_hi();
   // merge left
   // address header at left-1, check valid
   if (!(left == lo)) {
-    block_header* further_left = ((block_header_right*)left-1)->left;
+    Node* further_left = ((block_header_right*)left-1)->left;
     if ((void*)further_left >= lo && further_left->free) {
-      bfl_remove_block(bfl, left);
-      bfl_remove_block(bfl, further_left);
+      bfl_remove(bfl, left);
+      bfl_remove(bfl, further_left);
 
-      further_left->size += left->size + TOTAL_HEADER_SIZE;
+      further_left->size += left->size;
       left = further_left;
       left->right = right;
       right->left = left;
@@ -120,136 +80,136 @@ static block_header* try_merge(binned_free_list bfl, block_header* bl) {
   }
   // merge right
   // address header at right+1, check valid
-  if (!((void*)(right+sizeof(block_header)) > hi)) {
-    block_header* next_left = (block_header*)(left->right+1);
+  if (!((void*)(right+1) > hi)) {
+    Node* next_left = (Node*)(left->right+1);
     if ((void*)(next_left->right+1) < hi && next_left->free) {
-      bfl_remove_block(bfl, left);
-      bfl_remove_block(bfl, next_left);
+      bfl_remove(bfl, left);
+      bfl_remove(bfl, next_left);
 
-      left->size += next_left->size + TOTAL_HEADER_SIZE;
+      left->size += next_left->size;
       right = next_left->right;
       left->right = right;
       right->left = left;
       bfl_add_block(bfl, left);
     }
   }
-  return left;
 }
 
-static block_header* block_split(binned_free_list bfl, block_header* bl, const size_t size) {  
-  bfl_remove_block(bfl, bl);
-  block_header_right* right = bl->right;
+static void block_split(binned_free_list* bfl, Node* node, const size_t size) {
+  bfl_remove(bfl, node);
+  block_header_right* right = node->right;
 
   assert(size >= BFL_MIN_BLOCK_SIZE);
   // shrink left to size
-  bl->size = size;
-  bl->right = (block_header_right*)((char*)bl + sizeof(block_header) + size);
-  bl->right->left = bl;
+  node->size = size;
+  node->right = (block_header_right*)((void*)node + size) - 1;
+  node->right->left = node;
 
   // reinsert right to bfl
   // size is the difference from the old right header to the new right header
-  size_t right_size = (void*)right - (void*)(bl->right);
+  size_t right_size = (void*)right - (void*)(node->right);
   assert(right_size >= BFL_MIN_BLOCK_SIZE);
-  bfl_add(bfl, (void*)(bl->right+1), right_size);
-  return bl;
+  bfl_add(bfl, (void*)(node->right+1), right_size);
 }
 
-static int inline how_to_use_block(block_header* const bl, const size_t size) {
-  if (bl == NULL) return 0; // can't use
-  if (bl->size-size >= BFL_MIN_BLOCK_SIZE) return 1; // should split
-  if (bl->size > size) return 2; // don't need to split
+static int inline how_to_use_block(Node* const node, const size_t size) {
+  if (node == NULL) return 0; // can't use
+  if (node->size-size >= BFL_MIN_BLOCK_SIZE) return 1; // should split
+  if (node->size > size) return 2; // don't need to split
   return 0;
 }
 
-static bool inline can_use_block(block_header* const bl, const size_t size) {
-  return how_to_use_block(bl, size);
+static bool inline can_use_block(Node* const node, const size_t size) {
+  return how_to_use_block(node, size);
 }
 
-void* bfl_malloc(binned_free_list bfl, size_t size) {
-  assert(size >= 0);
+void* bfl_malloc(binned_free_list* bfl, size_t size) {
+  size += TOTAL_HEADER_SIZE;
   if (size < BFL_MIN_BLOCK_SIZE) {
     size = BFL_MIN_BLOCK_SIZE;
   }
-  size_t total_size = size + TOTAL_HEADER_SIZE;
-  const size_t k = lg2(total_size);
+  const size_t k = lg2_up(size);
 
   size_t depth = k;
-  block_header* bl = bfl[depth];
-  while (bl != NULL && !can_use_block(bl, total_size)) {
-    bl = bl->next;
+  Node* node = bfl->lists[depth];
+  while (node != NULL && !can_use_block(node, size)) {
+    node = node->next;
   }
-  if (bl == NULL) {
+  if (!can_use_block(node, size)) {
     depth++;
-    bl = bfl[depth];
-    while (!can_use_block(bl, total_size) && bl != NULL) {
-      bl = bl->next;
+    node = bfl->lists[depth];
+    while (node != NULL && !can_use_block(node, size)) {
+      node = node->next;
     }
   }
 
-  switch (how_to_use_block(bl, total_size)) {
+  switch (how_to_use_block(node, size)) {
     case 0: ;
       // No free block, allocate new
-      bl = (block_header*)alloc_aligned(total_size);
-      if (bl == NULL) {
+      node = (Node*)alloc_aligned(size);
+      if (node == NULL) {
         return NULL;
       }
+      node->size = size;
+      node->right = (block_header_right*)((void*)node + node->size) - 1;
+      node->right->left = node;
       break;
     case 1:
       // A free block found, should split
-      bl = block_split(bfl, bl, size);
+      block_split(bfl, node, size);
       break;
     case 2:
       // A free block found, no split necessary
-      bfl_remove_block(bfl, bl);
+      bfl_remove(bfl, node);
   }
 
-  bl->next = NULL;
-  bl->prev = NULL;
-  bl->size = size;
-  bl->free = false;
-  bl->right = (block_header_right*)((char*)bl + sizeof(block_header) + size);
-  bl->right->left = bl;
-  return (void*)((char*)bl + sizeof(block_header));
+  assert(node->size >= size);
+  node->next = NULL;
+  node->prev = NULL;
+  node->free = false;
+  assert(node->right == (block_header_right*)((void*)node + node->size) - 1);
+  assert(node->right->left == node);
+  return (void*)((void*)node + sizeof(Node));
 }
 
-void bfl_free(binned_free_list bfl, void* node) {
-  if (node == NULL) return;
-  block_header* bl = (block_header*)(node - sizeof(block_header));
-  bl->free = true;
-  bfl_add_block(bfl, bl);
-  try_merge(bfl, bl);
+void bfl_free(binned_free_list* bfl, void* ptr) {
+  if (ptr == NULL) return;
+  Node* node = (Node*)(ptr - sizeof(Node));
+  node->free = true;
+  bfl_add_block(bfl, node);
+  try_merge(bfl, node);
 }
 
-void* bfl_realloc(binned_free_list bfl, void* node, size_t size) {
+void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size) {
   // If the original node is NULL, we need to allocate a new node
-  if (node == NULL)
+  if (ptr == NULL)
     return bfl_malloc(bfl, size);
 
   // If the requested size is 0, we free the node
   if (size == 0) {
-    bfl_free(bfl, node);
-    return node;
+    bfl_free(bfl, ptr);
+    return NULL;
   }
 
-  block_header* bl = (block_header*)(node - sizeof(block_header));
-  // If the new size equals to the old size, or only a little smaller,
-  // return the old block
-  if (size <= bl->size && size > bl->size + BFL_MIN_BLOCK_SIZE) {
-    return node;
+  Node* node = (Node*)(ptr - sizeof(Node));
+  size_t old_size = node->size;
+  void* new_node;
+  switch(how_to_use_block(node, size)) {
+    case 0:
+      // If the requested size is larger than the current size,
+      // we malloc a new block of the new size, copy the content
+      // of the current block to the new block, and free the old block
+      new_node = bfl_malloc(bfl, size);
+      memcpy(new_node, ptr, old_size - sizeof(Node));
+      bfl_free(bfl, node);
+      return new_node;
+    case 1:
+      // Split bigger node to size
+      block_split(bfl, node, size);
+    case 2:
+      // If the new size equals to the old size, or only a little smaller,
+      // return the old block
+      break;
   }
-  /* If the requested size is larger than the current size,
-   * we malloc a new block of the new size, copy the content
-   * of the current block to the new block, and free the old block
-   */
-  if (size > bl->size) {
-    void* new_node = bfl_malloc(bfl, size);
-    memcpy(new_node, node, bl->size);
-    bfl_free(bfl, node);
-    return new_node;
-  } else {
-    // Otherwise, split the block into a smaller one
-    // Put the rest into the bfl
-    block_split(bfl, bl, size);
-  }
-  return bl;
+  return ptr;
 }

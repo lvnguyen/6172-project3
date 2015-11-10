@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #define BFL_MIN_BLOCK_SIZE 32
+#define BFL_MIN_LG 5
 #define BFL_SIZE 32
 #define WORD_ALIGN 8
 
@@ -16,35 +17,53 @@
 
 struct block_header_right;
 
-typedef struct block_header {
+typedef uint8_t lgsize_t;
+
+typedef struct Node {
   struct block_header_right* right;
-  struct block_header* next; // for free list
-  struct block_header* prev; // for free list
+  struct Node* next; // for free list
+  struct Node* prev; // for free list
   size_t size;
   bool free;
-} block_header;
+} Node;
 
 typedef struct block_header_right {
-  block_header* left;
+  Node* left;
 } block_header_right;
 
-#define TOTAL_HEADER_SIZE (sizeof(block_header)+sizeof(block_header_right))
+#define TOTAL_HEADER_SIZE (sizeof(Node)+sizeof(block_header_right))
 
-typedef block_header** binned_free_list;
+typedef struct {
+  Node* lists[BFL_SIZE];
+} binned_free_list;
 
 // create a binned free list
 binned_free_list bfl_new();
 
-// delete the binned free list
-void bfl_delete(binned_free_list bfl);
-
 // malloc using binned free list
-void* bfl_malloc(binned_free_list bfl, size_t size);
+void* bfl_malloc(binned_free_list* bfl, size_t size);
 
 // free using binned free list
-void bfl_free(binned_free_list bfl, void* node);
+void bfl_free(binned_free_list* bfl, void* ptr);
 
 // realloc using binned free list
-void* bfl_realloc(binned_free_list bfl, void* node, size_t size);
+void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size);
+
+// log base 2, rounding up: lg2(8)==3; lg2(9)==4;
+// but returned value is always at least BFL_MIN_LG.
+static lgsize_t lg2_up(size_t n) {
+  if (n) n--;
+  lgsize_t lg = BFL_MIN_LG;
+  n >>= BFL_MIN_LG - 1;
+  while (n >>= 1) lg++;
+  return lg;
+}
+
+// log base 2, rounding down: lg2(15)==3; lg2(16)==4;
+static lgsize_t lg2_down(size_t n) {
+  lgsize_t lg = 0;
+  while (n >>= 1) lg++;
+  return lg;
+}
 
 #endif
