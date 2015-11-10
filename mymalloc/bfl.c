@@ -137,14 +137,15 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
 
   size_t depth = k;
   Node* node = bfl->lists[depth];
+  // iterate current depth for usable block
   while (node != NULL && !can_use_block(node, size)) {
     node = node->next;
   }
+  // climb up the bfl for usable block
   if (!can_use_block(node, size)) {
     depth++;
-    node = bfl->lists[depth];
-    while (node != NULL && !can_use_block(node, size)) {
-      node = node->next;
+    while (depth < BFL_SIZE && !can_use_block(node, size)) {
+      node = bfl->lists[++depth];
     }
   }
 
