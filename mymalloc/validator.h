@@ -12,7 +12,6 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +28,26 @@
 #else
 #define IS_ALIGNED(p)  ((((uint32_t)(p)) % R_ALIGNMENT) == 0)
 #endif
+
+#define RANGES_INTERSECT(r1, r2_lo, r2_high) (!((r1)->lo > (r2_high) || (r1)->hi < (r2_lo)))
+
+// Simple hash function for malloc/realloc filler.
+#define FILLER(PTR, SIZE, INDEX) ((uint8_t)(((uint64_t)(PTR))         + \
+                                            ((uint64_t)(PTR) >> 8)    + \
+                                            ((uint64_t)(PTR) >> 16)   + \
+                                            ((uint64_t)(PTR) >> 24)   + \
+                                            ((uint64_t)(PTR) >> 32)   + \
+                                            ((uint64_t)(PTR) >> 40)   + \
+                                            ((uint64_t)(PTR) >> 48)   + \
+                                            ((uint64_t)(PTR) >> 56)   + \
+                                            ((uint32_t)(SIZE))        + \
+                                            ((uint32_t)(SIZE) >> 8)   + \
+                                            ((uint32_t)(SIZE) >> 16)  + \
+                                            ((uint32_t)(SIZE) >> 24)  + \
+                                            ((uint32_t)(INDEX))       + \
+                                            ((uint32_t)(INDEX) >> 8)  + \
+                                            ((uint32_t)(INDEX) >> 16) + \
+                                            ((uint32_t)(INDEX) >> 24)))
 
 // Range list data structure
 
@@ -51,73 +70,73 @@ typedef struct range_t {
 static int add_range(const malloc_impl_t *impl, range_t **ranges, char *lo,
     int size, int tracenum, int opnum) {
   char *hi = lo + size - 1;
-  range_t* p = NULL;
 
-  // You can use this as a buffer for writing messages with sprintf.
+  // You can use this as a buffer for writing messages with snprintf.
   char msg[MAXLINE];
 
   assert(size > 0);
 
   // Payload addresses must be R_ALIGNMENT-byte aligned
+  //
+  // Do not check alignment with hi since we cannot
+  // tell how much space is actually used by the implementation
+  // to allocate size bytes.
   if (!IS_ALIGNED(lo)) {
-    snprintf(msg, MAXLINE, "Payload address not aligned");
+    snprintf(msg, MAXLINE, "payload addresses lo:%p is not aligned.", lo);
     malloc_error(tracenum, opnum, msg);
     return 0;
   }
 
   // The payload must lie within the extent of the heap
-  if (!(lo >= (char *) mem_heap_lo() && hi < (char *) mem_heap_hi())) {
-    snprintf(msg, MAXLINE, "Payload not fully contained in heap");
-    malloc_error(tracenum, opnum, msg);
+  if (lo < (char*) mem_heap_lo() || hi > (char*) mem_heap_hi()) {
+    malloc_error(tracenum, opnum, "payload does not lie within extent of heap.");
     return 0;
   }
-
+  
   // The payload must not overlap any other payloads
-  for (p = *ranges; p != NULL; p = p->next) {
-    if (!(p->hi < lo || hi < p->lo)) {
-      snprintf(msg, MAXLINE, "Payload overlap");
+  for(range_t *curr_range = *ranges; curr_range != NULL; curr_range = curr_range->next) {
+    if (RANGES_INTERSECT(curr_range, lo, hi)) {
+      snprintf(msg, MAXLINE, "added range from lo:%p to hi:%p intersects with"
+               "previous range from lo:%p to hi:%p.", 
+               lo, hi, curr_range->lo, curr_range->hi);
       malloc_error(tracenum, opnum, msg);
       return 0;
-    }
+    } 
   }
 
   // Everything looks OK, so remember the extent of this block by creating a
   // range struct and adding it the range list.
-  p = malloc(sizeof(range_t));
-  p->lo = lo;
-  p->hi = hi;
-  p->next = *ranges;
-  *ranges = p;
+  range_t *added_range = (range_t*) malloc(sizeof(range_t));
+  added_range->lo = lo;
+  added_range->hi = hi;
+  added_range->next = *ranges;
+
+  *ranges = added_range;
 
   return 1;
 }
 
 // remove_range - Free the range record of block whose payload starts at lo
 static void remove_range(range_t **ranges, char *lo) {
-  range_t *p = *ranges;
+  range_t *curr_range = *ranges; 
+  range_t *prev = NULL;
 
   // Iterate the linked list until you find the range with a matching lo
   // payload and remove it.  Remember to properly handle the case where the
   // payload is in the first node, and to free the node after unlinking it.
-  bool is_removed = false;
-
-  if (p->lo == lo) {
-    *ranges = p->next;
-    p->next = NULL;
-    is_removed = true;
-    free(p);
-  } else {
-    for (; p->next != NULL; p = p->next) {
-      if (p->next->lo == lo) {
-        range_t *tmp = p->next;
-        p->next = tmp->next;
-        free(tmp);
-        is_removed = true;
-        break;
+  for (; curr_range != NULL; curr_range = curr_range->next) {
+    if (curr_range->lo == lo) {
+      if (prev == NULL) {
+        *ranges = curr_range->next;
+      } else {
+        prev->next = curr_range->next;
       }
+      free(curr_range);
+      return;
+    } else {
+      prev = curr_range;  
     }
   }
-  assert(is_removed);
 }
 
 // clear_ranges - free all of the range records for a trace
@@ -174,10 +193,8 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
 
         // Fill the allocated region with some unique data that you can check
         // for if the region is copied via realloc.
-        for (int i = 0; i < size; i++) {
-          *(p + i) = i;
-        }
-
+        memset(p, FILLER(p, size, index), size);
+        
         // Remember region
         trace->blocks[index] = p;
         trace->block_sizes[index] = size;
@@ -203,16 +220,15 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
         // and then fill in the new block with new data that you can use to
         // verify the block was copied if it is resized again.
         oldsize = trace->block_sizes[index];
-        if (size < oldsize)
-          oldsize = size;
+        int checksize = size < oldsize ? size : oldsize; 
 
-		// TODO: where does it assign value?
-        /*for (int i = 0; i < oldsize; i++) {
-          if (*(p+i) != i) {
-			malloc_error(tracenum, i, "Data corrupted");
-			return 0;
+        for(int i = 0; i < checksize; i++) {
+          if(newp[i] != (char) FILLER(oldp, oldsize, index)) {
+            malloc_error(tracenum, i, "realloc failed to correctly copy over data.");
+            return 0;
           }
-        }*/
+        }
+        memset(newp, FILLER(newp, size, index), size); 
 
         // Remember region
         trace->blocks[index] = newp;
