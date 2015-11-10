@@ -7,18 +7,36 @@
 #include "./bfl.h"
 #include "./memlib.h"
 
+static void inline bfl_remove(binned_free_list* bfl, Node* node);
+
 // alloc a block of value size, ensuring the returned address is 8-byte aligned
 // size must be a multiple of the word size (8 byte)
-static void* alloc_aligned(const size_t size) {
-  void * hi = mem_heap_hi();
-  size_t padding = (void *) ALIGN_WORD_FORWARD(hi) - hi;
-  size_t pad_size = padding + size;
-
-  void * q = mem_sbrk(pad_size);
+static Node* bfl_alloc_aligned(binned_free_list* bfl, const size_t size) {
+  assert(size < BFL_INSANITY_SIZE);
+  const void * lo = mem_heap_lo();
+  const void * hi = mem_heap_hi();
+  Node* node;
+  size_t delta;
+  // see if we can expand from a free node at the end of the heap
+  if (((block_header_right*)hi - 1) >= lo &&
+      ((block_header_right*)hi - 1)->left >= lo &&
+      ((block_header_right*)hi - 1)->left->free) {
+    node = ((block_header_right*)hi - 1)->left;
+    bfl_remove(bfl, node);
+    if (node->size >= size) return node;
+    delta = size - node->size;
+  } else {
+    const size_t padding = (void *) ALIGN_WORD_FORWARD(hi) - hi;
+    delta = padding + size;
+  }
+  void* q = mem_sbrk(delta);
   if (q == NULL) {
     return NULL;
   }
-  return mem_heap_hi() - size;
+  node = (Node*)(mem_heap_hi() - size);
+  node->size = size;
+  NODE_TO_RIGHT(node)->left = node;
+  return node;
 }
 
 binned_free_list bfl_new() {
@@ -152,13 +170,10 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
   switch (how_to_use_block(node, size)) {
     case 0:
       // No free block, allocate new
-      node = (Node*)alloc_aligned(size);
+      node = bfl_alloc_aligned(bfl, size);
       if (node == NULL) {
         return NULL;
       }
-      node->size = size;
-      assert(size < BFL_INSANITY_SIZE);
-      NODE_TO_RIGHT(node)->left = node;
       break;
     case 1:
       // A free block found, should split
