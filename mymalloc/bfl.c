@@ -222,28 +222,41 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size) {
     return NULL;
   }
 
-  Node* node = (Node*)((external_node*)ptr - 1);
+  // Coalesce before processing
+  Node* node = (Node*)((external_node*)ptr - 1);  
   Node* next_left;
+  while (1) {
+    next_left = (Node*)(NODE_TO_RIGHT(node)+1);
+    if ((void*)next_left < mem_heap_hi() && (void*)(NODE_TO_RIGHT(next_left)+1) < mem_heap_hi() && IS_FREE(next_left)) {    
+      bfl_remove(bfl, next_left);
+      UP_SIZE(node, next_left);
+      NODE_TO_RIGHT(node)->left = node;
+    }
+    else break;
+  }
+
   void* new_ptr;
   switch(how_to_use_block(node, size)) {
     case 0:
       // If the requested size is larger than the current size,
-      // we first see if we can coalesce right. Otherwise,
-      // we malloc a new block of the new size, copy the content
-      // of the current block to the new block, and free the old block
-      next_left = (Node*)(NODE_TO_RIGHT(node)+1);
-      if ((void*)next_left < mem_heap_hi() && (void*)(NODE_TO_RIGHT(next_left)+1) < mem_heap_hi() && IS_FREE(next_left)) {
-        bfl_remove(bfl, next_left);
-        UP_SIZE(node, next_left);
+      // first we check if the block is at the end of the heap
+      // If so, we can perform a small grow; otherwise we need to grow a big block in the end
+
+      // Check for end of block. Hacky but work
+      if (mem_heap_hi() - ptr == node->size - 8) {
+        NODE_TO_RIGHT(node)->left = NULL;
+        mem_sbrk(size - node->size);
+        SET_SIZE(node, size);
         NODE_TO_RIGHT(node)->left = node;
-        return bfl_realloc(bfl, ptr, orig_size);
-      } else {
-        new_ptr = bfl_malloc(bfl, orig_size);
-        memcpy(new_ptr, ptr, GET_SIZE(node) - TOTAL_HEADER_SIZE);
-        bfl_free(bfl, ptr);
-        assert(IS_WORD_ALIGNED(new_ptr));
-        return new_ptr;
+        return ptr;
       }
+
+      // Normal malloc
+      new_ptr = bfl_malloc(bfl, orig_size);
+      memcpy(new_ptr, ptr, GET_SIZE(node) - TOTAL_HEADER_SIZE);
+      bfl_free(bfl, ptr);
+      assert(IS_WORD_ALIGNED(new_ptr));
+      return new_ptr;
     case 1:
       // Split bigger node to size
       bfl_block_split(bfl, node, size);
