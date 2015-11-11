@@ -7,7 +7,7 @@
 #include "./bfl.h"
 #include "./memlib.h"
 
-static void inline bfl_remove(binned_free_list* bfl, Node* node);
+static void bfl_remove(binned_free_list* bfl, Node* node);
 
 // alloc a block of value size, ensuring the returned address is 8-byte aligned
 // size must be a multiple of the word size (8 byte)
@@ -48,7 +48,7 @@ binned_free_list bfl_new() {
   return bfl;
 }
 
-static void inline bfl_remove(binned_free_list* bfl, Node* node) {
+static void bfl_remove(binned_free_list* bfl, Node* node) {
   if (!IS_FREE(node)) return;
   if (node->prev != NULL) {
     node->prev->next = node->next;
@@ -59,7 +59,7 @@ static void inline bfl_remove(binned_free_list* bfl, Node* node) {
   SET_UNFREE(node);
 }
 
-static void inline bfl_add_block(binned_free_list* bfl, Node* node) {
+static void bfl_add_block(binned_free_list* bfl, Node* node) {
   const lgsize_t k = lg2_down(GET_SIZE(node));
   SET_FREE(node);
   node->prev = NULL;
@@ -70,7 +70,7 @@ static void inline bfl_add_block(binned_free_list* bfl, Node* node) {
   bfl->lists[k] = node;
 }
 
-static void inline bfl_add(binned_free_list* bfl, void* ptr, size_t size) {
+static void bfl_add(binned_free_list* bfl, void* ptr, size_t size) {
   assert(size < BFL_INSANITY_SIZE);
   Node* node = (Node*)ptr;
   SET_SIZE(node, size);
@@ -131,7 +131,7 @@ static void bfl_block_split(binned_free_list* bfl, Node* node, const size_t size
   bfl_add(bfl, (void*)(mid_right+1), right_size);
 }
 
-static int inline how_to_use_block(Node* const node, const size_t size) {
+static int how_to_use_block(Node* const node, const size_t size) {
   if (node == NULL || GET_SIZE(node) < size) return 0; // can't use
   if (GET_SIZE(node)-size >= BFL_MIN_BLOCK_SIZE) return 1; // should split
   if (GET_SIZE(node) > size) return 2; // don't need to split
