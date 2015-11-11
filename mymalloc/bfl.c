@@ -6,8 +6,20 @@
 
 #include "./bfl.h"
 #include "./memlib.h"
+#define THRESHOLD_SBRK 256
 
 static void inline bfl_remove(binned_free_list* bfl, Node* node);
+
+// Experiment: grow at fixed rate
+/*void * threshold_sbrk(int incr) {  
+  int target_size = incr;
+  if (incr < THRESHOLD_SBRK) {
+    while ((target_size - incr) % WORD_ALIGN) target_size++;
+  } else {
+    target_size = incr;
+  }
+  return mem_sbrk(target_size);
+}*/
 
 // alloc a block of value size, ensuring the returned address is 8-byte aligned
 // size must be a multiple of the word size (8 byte)
@@ -15,21 +27,17 @@ static Node* bfl_alloc_aligned(binned_free_list* bfl, const size_t size) {
   assert(size < BFL_INSANITY_SIZE);
   const void * lo = mem_heap_lo();
   const void * hi = mem_heap_hi();
+
   Node* node;
   size_t delta;
   // see if we can expand from a free node at the end of the heap
-  if ((void*)((block_header_right*)hi - 1) >= lo) {
-    if ((void*)(((block_header_right*)hi - 1)->left) >= lo) {
-      if ((void*)(((block_header_right*)hi - 1)->left) < hi) {
-        if (IS_FREE(((block_header_right*)hi - 1)->left)) {
-          node = ((block_header_right*)hi - 1)->left;
-          bfl_remove(bfl, node);
-          if (GET_SIZE(node) >= size) return node;
-          delta = size - GET_SIZE(node);
-          goto bfl_alloc_aligned_end;
-        }
-      }
-    }
+  if ( ((void*)((block_header_right*)hi - 1) >= lo) && ((void*)(((block_header_right*)hi - 1)->left) >= lo) &&
+      ((void*)(((block_header_right*)hi - 1)->left) < hi) && (IS_FREE(((block_header_right*)hi - 1)->left)) ) {
+    node = ((block_header_right*)hi - 1)->left;
+    bfl_remove(bfl, node);
+    if (GET_SIZE(node) >= size) return node;
+    delta = size - GET_SIZE(node);
+    goto bfl_alloc_aligned_end;
   }
   const size_t padding = (void*) ALIGN_WORD_FORWARD(hi) - hi;
   delta = padding + size;
@@ -89,33 +97,43 @@ static void bfl_coalesce(binned_free_list* bfl, Node* node) {
   block_header_right* right = NODE_TO_RIGHT(node);
   const void* lo = mem_heap_lo();
   const void* hi = mem_heap_hi();
-  // merge left
-  // address header at left-1, check valid
-  if (!(left == lo)) {
-    Node* further_left = ((block_header_right*)left-1)->left;
+
+  bool is_removed_left = false;
+  bool is_removed_right = false;
+
+  Node* further_left;
+  Node* next_left;
+  if (left != lo) {
+    further_left = ((block_header_right*)left-1)->left; 
     if ((void*)further_left >= lo && (void*)further_left < hi && IS_FREE(further_left)) {
-      bfl_remove(bfl, left);
+      is_removed_left = true;
       bfl_remove(bfl, further_left);
-
-      UP_SIZE(further_left, left);
-      left = further_left;
-      right->left = left;
-      bfl_add_block(bfl, left);
     }
   }
-  // merge right
-  // address header at right+1, check valid
+
   if (!((void*)(right+1) > hi)) {
-    Node* next_left = (Node*)(NODE_TO_RIGHT(node)+1);
+    next_left = (Node*)(NODE_TO_RIGHT(node)+1);
     if ((void*)next_left < hi && (void*)(NODE_TO_RIGHT(next_left)+1) < hi && IS_FREE(next_left)) {
-      bfl_remove(bfl, left);
+      is_removed_right = true;
       bfl_remove(bfl, next_left);
-
-      UP_SIZE(left, next_left);
-      NODE_TO_RIGHT(left)->left = left;
-      bfl_add_block(bfl, left);
     }
   }
+
+  if (is_removed_left || is_removed_right) {
+    bfl_remove(bfl, left);
+  } else {
+    return;
+  }
+
+  if (is_removed_left) {
+    UP_SIZE(further_left, left);
+    left = further_left;
+  }
+  if (is_removed_right) {
+    UP_SIZE(left, next_left);
+  }
+  NODE_TO_RIGHT(left)->left = left;
+  bfl_add_block(bfl, left);
 }
 
 static void bfl_block_split(binned_free_list* bfl, Node* node, const size_t size) {
@@ -162,13 +180,15 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
 
   size_t depth = k;
   Node* node = bfl->lists[depth];
+
   // iterate current depth for usable block
   while (node != NULL && !can_use_block(node, size)) {
     node = node->next;
   }
+
   // climb up the bfl for usable block
   if (!can_use_block(node, size)) {
-	while (depth < BFL_SIZE && !can_use_block(node, size)) {
+  	while (depth < BFL_SIZE && !can_use_block(node, size)) {
       node = bfl->lists[++depth];
     }
   }
