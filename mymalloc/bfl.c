@@ -86,39 +86,25 @@ static void bfl_coalesce(binned_free_list* bfl, Node* node) {
   const void* lo = mem_heap_lo();
   const void* hi = mem_heap_hi();
 
-  bool is_removed_left = false;
-  bool is_removed_right = false;
-
   Node* further_left;
   Node* next_left;
   if (left != lo) {
     further_left = ((block_header_right*)left-1)->left;
     if ((void*)further_left >= lo && (void*)further_left < hi && IS_FREE(further_left)) {
-      is_removed_left = true;
       bfl_remove(bfl, further_left);
+      UP_SIZE(further_left, left);
+      left = further_left;
     }
   }
 
   if (!((void*)(right+1) > hi)) {
     next_left = (Node*)(NODE_TO_RIGHT(node)+1);
     if ((void*)next_left < hi && (void*)(NODE_TO_RIGHT(next_left)+1) < hi && IS_FREE(next_left)) {
-      is_removed_right = true;
+      UP_SIZE(left, next_left);
       bfl_remove(bfl, next_left);
     }
   }
 
-  if (!is_removed_left && !is_removed_right) {
-    bfl_add_block(bfl, left);
-    return;
-  }
-
-  if (is_removed_left) {
-    UP_SIZE(further_left, left);
-    left = further_left;
-  }
-  if (is_removed_right) {
-    UP_SIZE(left, next_left);
-  }
   NODE_TO_RIGHT(left)->left = left;
   bfl_add_block(bfl, left);
 }
