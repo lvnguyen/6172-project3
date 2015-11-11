@@ -5,6 +5,7 @@
 
 #define BFL_INSANITY_SIZE (1 << 25)
 #define BFL_MIN_BLOCK_SIZE 64
+#define BFL_MIN_SPLIT_SIZE 2*BFL_MIN_BLOCK_SIZE
 #define BFL_MIN_LG 6
 #define BFL_SIZE 32
 #define WORD_ALIGN 8

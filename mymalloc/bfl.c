@@ -114,7 +114,7 @@ static void bfl_block_split(binned_free_list* bfl, Node* node, const size_t size
   assert(size < BFL_INSANITY_SIZE);
   assert(size < GET_SIZE(node));
   assert(GET_SIZE(node) < BFL_INSANITY_SIZE);
-  assert(GET_SIZE(node) >= size + BFL_MIN_BLOCK_SIZE);
+  assert(GET_SIZE(node) >= size + BFL_MIN_SPLIT_SIZE);
   bfl_remove(bfl, node);
   block_header_right* right = NODE_TO_RIGHT(node);
 
@@ -133,7 +133,7 @@ static void bfl_block_split(binned_free_list* bfl, Node* node, const size_t size
 
 static int how_to_use_block(Node* const node, const size_t size) {
   if (node == NULL || GET_SIZE(node) < size) return 0; // can't use
-  if (GET_SIZE(node)-size >= BFL_MIN_BLOCK_SIZE) return 1; // should split
+  if (GET_SIZE(node)-size >= BFL_MIN_SPLIT_SIZE) return 1; // should split
   if (GET_SIZE(node) > size) return 2; // don't need to split
   return 0;
 }
