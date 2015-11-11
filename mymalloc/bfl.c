@@ -107,9 +107,8 @@ static void bfl_coalesce(binned_free_list* bfl, Node* node) {
     }
   }
 
-  if (is_removed_left || is_removed_right) {
-    bfl_remove(bfl, left);
-  } else {
+  if (!is_removed_left && !is_removed_right) {
+    bfl_add_block(bfl, left);
     return;
   }
 
@@ -218,7 +217,6 @@ void bfl_free(binned_free_list* bfl, void* ptr) {
   if (ptr == NULL) return;
   Node* node = (Node*)((external_node*)ptr - 1);
   SET_FREE(node);
-  bfl_add_block(bfl, node);
   bfl_coalesce(bfl, node);
 }
 
