@@ -6,20 +6,8 @@
 
 #include "./bfl.h"
 #include "./memlib.h"
-#define THRESHOLD_SBRK 256
 
 static void inline bfl_remove(binned_free_list* bfl, Node* node);
-
-// Experiment: grow at fixed rate
-/*void * threshold_sbrk(int incr) {  
-  int target_size = incr;
-  if (incr < THRESHOLD_SBRK) {
-    while ((target_size - incr) % WORD_ALIGN) target_size++;
-  } else {
-    target_size = incr;
-  }
-  return mem_sbrk(target_size);
-}*/
 
 // alloc a block of value size, ensuring the returned address is 8-byte aligned
 // size must be a multiple of the word size (8 byte)
@@ -72,7 +60,7 @@ static void inline bfl_remove(binned_free_list* bfl, Node* node) {
 }
 
 static void inline bfl_add_block(binned_free_list* bfl, Node* node) {
-  const size_t k = lg2_down(GET_SIZE(node));
+  const lgsize_t k = lg2_down(GET_SIZE(node));
   SET_FREE(node);
   node->prev = NULL;
   node->next = bfl->lists[k];
@@ -104,7 +92,7 @@ static void bfl_coalesce(binned_free_list* bfl, Node* node) {
   Node* further_left;
   Node* next_left;
   if (left != lo) {
-    further_left = ((block_header_right*)left-1)->left; 
+    further_left = ((block_header_right*)left-1)->left;
     if ((void*)further_left >= lo && (void*)further_left < hi && IS_FREE(further_left)) {
       is_removed_left = true;
       bfl_remove(bfl, further_left);
@@ -175,9 +163,9 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
     size = BFL_MIN_BLOCK_SIZE;
   }
   size = ALIGN_WORD_FORWARD(size);
-  const size_t k = lg2_up(size);
+  const lgsize_t k = lg2_up(size);
 
-  size_t depth = k;
+  lgsize_t depth = k;
   Node* node = bfl->lists[depth];
 
   // iterate current depth for usable block
@@ -187,7 +175,7 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
 
   // climb up the bfl for usable block
   if (!can_use_block(node, size)) {
-  	while (depth < BFL_SIZE && !can_use_block(node, size)) {
+    while (depth < BFL_SIZE && !can_use_block(node, size)) {
       node = bfl->lists[++depth];
     }
   }
@@ -234,8 +222,8 @@ void bfl_free(binned_free_list* bfl, void* ptr) {
   bfl_coalesce(bfl, node);
 }
 
-void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size) {
-  const size_t orig_size = size;
+void* bfl_realloc(binned_free_list* bfl, void* ptr, const size_t orig_size) {
+  size_t size = orig_size;
   size += TOTAL_HEADER_SIZE;
   if (size < BFL_MIN_BLOCK_SIZE) {
     size = BFL_MIN_BLOCK_SIZE;
@@ -252,11 +240,11 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size) {
   }
 
   // Coalesce before processing
-  Node* node = (Node*)((external_node*)ptr - 1);  
+  Node* node = (Node*)((external_node*)ptr - 1);
   Node* next_left;
   while (1) {
     next_left = (Node*)(NODE_TO_RIGHT(node)+1);
-    if ((void*)next_left < mem_heap_hi() && (void*)(NODE_TO_RIGHT(next_left)+1) < mem_heap_hi() && IS_FREE(next_left)) {    
+    if ((void*)next_left < mem_heap_hi() && (void*)(NODE_TO_RIGHT(next_left)+1) < mem_heap_hi() && IS_FREE(next_left)) {
       bfl_remove(bfl, next_left);
       UP_SIZE(node, next_left);
       NODE_TO_RIGHT(node)->left = node;
