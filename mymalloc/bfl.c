@@ -8,6 +8,7 @@
 #include "./memlib.h"
 
 static void bfl_remove(binned_free_list* bfl, Node* node);
+typedef enum {NOT_AVAILABLE, SPLIT_ABLE, SPLIT_UNABLE} block_type;
 
 // alloc a block of value size, ensuring the returned address is 8-byte aligned
 // size must be a multiple of the word size (8 byte)
@@ -18,21 +19,24 @@ static Node* bfl_alloc_aligned(binned_free_list* bfl, const size_t size) {
 
   Node* node;
   size_t delta;
-  // see if we can expand from a free node at the end of the heap
+  // If there is some free space at the end of the heap, we simply extend it
   if ( ((void*)((block_header_right*)hi - 1) >= lo) && ((void*)(((block_header_right*)hi - 1)->left) >= lo) &&
       ((void*)(((block_header_right*)hi - 1)->left) < hi) && (IS_FREE(((block_header_right*)hi - 1)->left)) ) {
     node = ((block_header_right*)hi - 1)->left;
     bfl_remove(bfl, node);
     if (GET_SIZE(node) >= size) return node;
     delta = size - GET_SIZE(node);
-    goto bfl_alloc_aligned_end;
+  } else {
+	// The padding is to ensure the node address is 8-byte aligned
+    const size_t padding = (void*) ALIGN_WORD_FORWARD(hi) - hi;
+    delta = padding + size;
   }
-  const size_t padding = (void*) ALIGN_WORD_FORWARD(hi) - hi;
-  delta = padding + size;
-bfl_alloc_aligned_end:
+  
   if (mem_sbrk(delta) == NULL) {
     return NULL;
   }
+  
+  // Set up metadata for node
   node = (Node*)(mem_heap_hi() - size);
   SET_SIZE(node, size);
   SET_UNFREE(node);
@@ -40,6 +44,7 @@ bfl_alloc_aligned_end:
   return node;
 }
 
+// Create a new binned free list
 binned_free_list bfl_new() {
   binned_free_list bfl;
   for (int i = 0; i < BFL_SIZE; i++) {
@@ -48,6 +53,7 @@ binned_free_list bfl_new() {
   return bfl;
 }
 
+// Remove a node from the binned free list
 static void bfl_remove(binned_free_list* bfl, Node* node) {
   if (!IS_FREE(node)) return;
   if (node->prev != NULL) {
@@ -59,6 +65,7 @@ static void bfl_remove(binned_free_list* bfl, Node* node) {
   SET_UNFREE(node);
 }
 
+// Add a block to the binned free list
 static void bfl_add_block(binned_free_list* bfl, Node* node) {
   const lgsize_t k = lg2_down(GET_SIZE(node));
   SET_FREE(node);
@@ -70,6 +77,7 @@ static void bfl_add_block(binned_free_list* bfl, Node* node) {
   bfl->lists[k] = node;
 }
 
+// Wrap a Node object to ptr and add to binned free list
 static void bfl_add(binned_free_list* bfl, void* ptr, size_t size) {
   assert(size < BFL_INSANITY_SIZE);
   Node* node = (Node*)ptr;
@@ -78,6 +86,10 @@ static void bfl_add(binned_free_list* bfl, void* ptr, size_t size) {
   bfl_add_block(bfl, node);
 }
 
+/* Perform coalescing (when you free node). By design, there are no two adjacent free blocks
+ * Therefore bfl_coalesce will not be recursive.
+ * There will be at most three blocks merging together, and we do separate checks for that.
+ */
 static void bfl_coalesce(binned_free_list* bfl, Node* node) {
   if (node == NULL) return;
   assert(IS_FREE(node));
@@ -86,6 +98,7 @@ static void bfl_coalesce(binned_free_list* bfl, Node* node) {
   const void* lo = mem_heap_lo();
   const void* hi = mem_heap_hi();
 
+  // Check for the block adjacent to the left of node
   Node* further_left;
   Node* next_left;
   if (left != lo) {
@@ -97,6 +110,7 @@ static void bfl_coalesce(binned_free_list* bfl, Node* node) {
     }
   }
 
+  // Check for the block adjacent to the right of node
   if (!((void*)(right+1) > hi)) {
     next_left = (Node*)(NODE_TO_RIGHT(node)+1);
     if ((void*)next_left < hi && (void*)(NODE_TO_RIGHT(next_left)+1) < hi && IS_FREE(next_left)) {
@@ -109,12 +123,14 @@ static void bfl_coalesce(binned_free_list* bfl, Node* node) {
   bfl_add_block(bfl, left);
 }
 
+// Perform a block split
 static void bfl_block_split(binned_free_list* bfl, Node* node, const size_t size) {
   assert(size >= BFL_MIN_BLOCK_SIZE);
   assert(size < BFL_INSANITY_SIZE);
   assert(size < GET_SIZE(node));
   assert(GET_SIZE(node) < BFL_INSANITY_SIZE);
   assert(GET_SIZE(node) >= size + BFL_MIN_SPLIT_SIZE);
+  
   bfl_remove(bfl, node);
   block_header_right* right = NODE_TO_RIGHT(node);
 
@@ -131,41 +147,48 @@ static void bfl_block_split(binned_free_list* bfl, Node* node, const size_t size
   bfl_add(bfl, (void*)(mid_right+1), right_size);
 }
 
-static int how_to_use_block(Node* const node, const size_t size) {
-  if (node == NULL || GET_SIZE(node) < size) return 0; // can't use
-  if (GET_SIZE(node)-size >= BFL_MIN_SPLIT_SIZE) return 1; // should split
-  if (GET_SIZE(node) > size) return 2; // don't need to split
-  return 0;
+// This helper function checks for what purpose we want to do with the block
+static block_type how_to_use_block(Node* const node, const size_t size) {
+  if (node == NULL || GET_SIZE(node) < size) return NOT_AVAILABLE;  // can't use
+  if (GET_SIZE(node)-size >= BFL_MIN_SPLIT_SIZE) return SPLIT_ABLE;  // should split
+  if (GET_SIZE(node) > size) return SPLIT_UNABLE;  // don't need to split
+  return NOT_AVAILABLE;
 }
 
+// Can we use this block for allocating purpose?
 static bool inline can_use_block(Node* const node, const size_t size) {
-  return how_to_use_block(node, size);
+  block_type answer = how_to_use_block(node, size);
+  return (answer != NOT_AVAILABLE);
 }
 
+// Malloc on bfl
 void* bfl_malloc(binned_free_list* bfl, size_t size) {
   size += TOTAL_HEADER_SIZE;
   if (size < BFL_MIN_BLOCK_SIZE) {
     size = BFL_MIN_BLOCK_SIZE;
   }
   size = ALIGN_WORD_FORWARD(size);
+  
+  // We find the smallest level that one can use a free block
   const lgsize_t k = lg2_up(size);
-
   lgsize_t depth = k;
   Node* node = bfl->lists[depth];
 
-  // iterate current depth for usable block
+  // At level k, one needs to check for all blocks
+  // Since blocks can have smaller size than the requested size
+  // That won't happen in higher levels
   while (node != NULL && !can_use_block(node, size)) {
     node = node->next;
   }
 
-  // climb up the bfl for usable block
+  // For level depth > k, simply checking if there's any free block suffices
   if (!can_use_block(node, size)) {
     while (depth < BFL_SIZE && !can_use_block(node, size)) {
       node = bfl->lists[++depth];
     }
   }
 
-  // Not only we use this block, we use the smallest sized one
+  // A block has been found. We restrict to the smallest possible size block
   if (node != NULL) {
     Node * tmp_node = node->next;
     for (tmp_node = node->next; tmp_node != NULL; tmp_node = tmp_node->next) {
@@ -176,18 +199,18 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
   }
 
   switch (how_to_use_block(node, size)) {
-    case 0:
+    case NOT_AVAILABLE:
       // No free block, allocate new
       node = bfl_alloc_aligned(bfl, size);
       if (node == NULL) {
         return NULL;
       }
       break;
-    case 1:
+    case SPLIT_ABLE:
       // A free block found, should split
       bfl_block_split(bfl, node, size);
       break;
-    case 2:
+    case SPLIT_UNABLE:
       // A free block found, no split necessary
       bfl_remove(bfl, node);
   }
@@ -199,6 +222,7 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
   return (void*)((external_node*)node + 1);
 }
 
+// Free a block
 void bfl_free(binned_free_list* bfl, void* ptr) {
   if (ptr == NULL) return;
   Node* node = (Node*)((external_node*)ptr - 1);
@@ -206,6 +230,7 @@ void bfl_free(binned_free_list* bfl, void* ptr) {
   bfl_coalesce(bfl, node);
 }
 
+// Realloc a block
 void* bfl_realloc(binned_free_list* bfl, void* ptr, const size_t orig_size) {
   // If the original node is NULL, we need to allocate a new node
   if (ptr == NULL)
@@ -223,7 +248,7 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, const size_t orig_size) {
     size = BFL_MIN_BLOCK_SIZE;
   }
 
-  // Coalesce before processing
+  // We coalesce before checking
   Node* node = (Node*)((external_node*)ptr - 1);
   Node* next_left = (Node*)(NODE_TO_RIGHT(node)+1);
   void* hi = mem_heap_hi();
@@ -234,14 +259,15 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, const size_t orig_size) {
   }
 
   switch(how_to_use_block(node, size)) {
-    case 0:
+    case NOT_AVAILABLE:
       // If the requested size is larger than the current size,
       // first we check if the block is at the end of the heap
       // If so, we can perform a small grow;
       // otherwise we need to grow a big block in the end
-
+	  
       // Check for end of block.
-      if (hi - GET_SIZE(node) == (void*)node) {
+      // Splitting like this is not really optimal, but it's too late to change
+	  if (hi - GET_SIZE(node) == (void*)node) {
         NODE_TO_RIGHT(node)->left = NULL;
         mem_sbrk(size - node->size);
         SET_SIZE(node, size);
@@ -255,11 +281,11 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, const size_t orig_size) {
       bfl_free(bfl, ptr);
       assert(IS_WORD_ALIGNED(new_ptr));
       return new_ptr;
-    case 1:
+    case SPLIT_ABLE:
       // Split bigger node to size
       bfl_block_split(bfl, node, size);
       break;
-    case 2:
+    case SPLIT_UNABLE:
       // If the new size equals to the old size, or only a little smaller,
       // return the old block
       break;

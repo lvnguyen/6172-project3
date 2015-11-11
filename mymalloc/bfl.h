@@ -31,10 +31,22 @@ typedef uint8_t lgsize_t;
 #define SET_SIZE(node, size) (node->size = (size & ~1) | IS_FREE(node))
 #define UP_SIZE(node, other) (node->size += GET_SIZE(other))
 
+/*
+ * The structure of a node is as following
+ * --------------------------------------
+ * | Header | Data | block_header_right |
+ * --------------------------------------
+ * in which the header contains the metadata of the block
+ * such as which node before it and after it.
+ *
+ * block_header_right will point back to the beginning of the block.
+ * This will be used for coalescing purpose 
+ */
+
 typedef struct Node {
   size_t size;
-  struct Node* next; // for free list
-  struct Node* prev; // for free list
+  struct Node* next;  // next node in the free list of that level
+  struct Node* prev;  // previous node in the free list of that level
 } Node;
 
 typedef struct {
@@ -42,11 +54,15 @@ typedef struct {
 } external_node;
 
 typedef struct block_header_right {
-  Node* left;
+  Node* left;  // pointing back to the beginning of the block
 } block_header_right;
 
 #define TOTAL_HEADER_SIZE (sizeof(external_node)+sizeof(block_header_right))
 
+/*
+ * The binned_free_list is an array of free nodes
+ * The k-th level contains nodes of size up to 2^k, but more than 2^(k - 1) (including headers)
+ */
 typedef struct {
   Node* lists[BFL_SIZE];
 } binned_free_list;
@@ -63,8 +79,7 @@ void bfl_free(binned_free_list* bfl, void* ptr);
 // realloc using binned free list
 void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size);
 
-// log base 2, rounding up: lg2(8)==3; lg2(9)==4;
-// but returned value is always at least BFL_MIN_LG.
+// log base 2, rounding up: lg2(8)==3; lg2(9)==4.
 static lgsize_t lg2_up(size_t n) {
   if (n == 0) return 0;
   lgsize_t ups = (31 - __builtin_clz((int) n));
