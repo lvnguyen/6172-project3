@@ -51,23 +51,21 @@ binned_free_list bfl;
 // block points to either the beginning of the next block, or the end of the
 // heap.
 int my_check() {
-  char *p;
-  char *lo = (char*)mem_heap_lo();
-  char *hi = (char*)mem_heap_hi() + 1;
+  // Disable it since it's not needed
+  /*char *lo = (char*)mem_heap_lo();
+  char *hi = (char*)mem_heap_hi();
   size_t size = 0;
 
-  p = lo;
-  while (lo <= p && p < hi) {
-    size = ALIGN(*(size_t*)p + SIZE_T_SIZE);
-    p += size;
+  void * p = hi - 1;
+  while (p >= lo) {
   }
-
+  
   if (p != hi) {
     printf("Bad headers did not end at heap_hi!\n");
     printf("heap_lo: %p, heap_hi: %p, size: %lu, p: %p\n", lo, hi, size, p);
     return -1;
   }
-
+  */
   return 0;
 }
 
