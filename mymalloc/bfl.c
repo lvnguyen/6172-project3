@@ -156,7 +156,6 @@ static void bfl_block_split(binned_free_list* bfl, Node* node, const size_t size
   size_t right_size = (void*)right - (void*)mid_right;
   assert(right_size >= BFL_MIN_BLOCK_SIZE);
   bfl_add(bfl, (void*)(mid_right+1), right_size);
-  bfl_coalesce(bfl, (Node*)(mid_right+1));
 }
 
 static int inline how_to_use_block(Node* const node, const size_t size) {
@@ -190,6 +189,16 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
   if (!can_use_block(node, size)) {
   	while (depth < BFL_SIZE && !can_use_block(node, size)) {
       node = bfl->lists[++depth];
+    }
+  }
+
+  // Not only we use this block, we use the smallest sized one
+  if (node != NULL) {
+    Node * tmp_node = node->next;
+    for (tmp_node = node->next; tmp_node != NULL; tmp_node = tmp_node->next) {
+      if (tmp_node->size < node->size && can_use_block(tmp_node, size)) {
+        node = tmp_node;
+      }
     }
   }
 
