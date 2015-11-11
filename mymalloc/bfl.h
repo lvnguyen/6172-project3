@@ -7,7 +7,7 @@
 #define BFL_MIN_BLOCK_SIZE 64
 #define BFL_MIN_SPLIT_SIZE 2*BFL_MIN_BLOCK_SIZE
 #define BFL_MIN_LG 6
-#define BFL_SIZE 24
+#define BFL_SIZE 26
 #define WORD_ALIGN 8
 
 #define ALIGNED(x, alignment) ((((uint64_t)x) & ((alignment)-1)) == 0)
