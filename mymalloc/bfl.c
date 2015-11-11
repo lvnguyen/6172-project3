@@ -196,7 +196,7 @@ void* bfl_malloc(binned_free_list* bfl, size_t size) {
   if (node != NULL) {
     Node * tmp_node = node->next;
     for (tmp_node = node->next; tmp_node != NULL; tmp_node = tmp_node->next) {
-      if (tmp_node->size < node->size && can_use_block(tmp_node, size)) {
+      if (GET_SIZE(tmp_node) < GET_SIZE(node) && can_use_block(tmp_node, size)) {
         node = tmp_node;
       }
     }
