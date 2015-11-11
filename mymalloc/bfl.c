@@ -241,15 +241,12 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, const size_t orig_size) {
 
   // Coalesce before processing
   Node* node = (Node*)((external_node*)ptr - 1);
-  Node* next_left;
-  while (1) {
-    next_left = (Node*)(NODE_TO_RIGHT(node)+1);
-    if ((void*)next_left < mem_heap_hi() && (void*)(NODE_TO_RIGHT(next_left)+1) < mem_heap_hi() && IS_FREE(next_left)) {
-      bfl_remove(bfl, next_left);
-      UP_SIZE(node, next_left);
-      NODE_TO_RIGHT(node)->left = node;
-    }
-    else break;
+  Node* next_left = (Node*)(NODE_TO_RIGHT(node)+1);
+  void* hi = mem_heap_hi();
+  if ((void*)next_left < hi && IS_FREE(next_left)) {
+    bfl_remove(bfl, next_left);
+    UP_SIZE(node, next_left);
+    NODE_TO_RIGHT(node)->left = node;
   }
 
   void* new_ptr;
@@ -257,10 +254,11 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, const size_t orig_size) {
     case 0:
       // If the requested size is larger than the current size,
       // first we check if the block is at the end of the heap
-      // If so, we can perform a small grow; otherwise we need to grow a big block in the end
+      // If so, we can perform a small grow;
+      // otherwise we need to grow a big block in the end
 
-      // Check for end of block. Hacky but work
-      if (mem_heap_hi() - ptr == node->size - 8) {
+      // Check for end of block.
+      if (hi - GET_SIZE(node) == (void*)node) {
         NODE_TO_RIGHT(node)->left = NULL;
         mem_sbrk(size - node->size);
         SET_SIZE(node, size);
