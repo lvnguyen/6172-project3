@@ -65,18 +65,14 @@ void* bfl_realloc(binned_free_list* bfl, void* ptr, size_t size);
 // log base 2, rounding up: lg2(8)==3; lg2(9)==4;
 // but returned value is always at least BFL_MIN_LG.
 static lgsize_t lg2_up(size_t n) {
-  if (n) n--;
-  lgsize_t lg = BFL_MIN_LG;
-  n >>= BFL_MIN_LG - 1;
-  while (n >>= 1) lg++;
-  return lg;
+  if (n == 0) return 0;
+  lgsize_t ups = (31 - __builtin_clz((int) n));
+  return ((1 << ups) != n) ? (ups + 1) : ups;
 }
 
 // log base 2, rounding down: lg2(15)==3; lg2(16)==4;
 static lgsize_t lg2_down(size_t n) {
-  lgsize_t lg = 0;
-  while (n >>= 1) lg++;
-  return lg;
+  return (n == 0) ? 0 : (31 - __builtin_clz((int) n));
 }
 
 #endif
